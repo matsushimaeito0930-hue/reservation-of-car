@@ -1,0 +1,9 @@
+{
+  "name": "Rapan予約",
+  "short_name": "Rapan",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f7f4",
+  "theme_color": "#24524a",
+  "icons": []
+}
