@@ -616,13 +616,23 @@ app.delete("/api/reservations/:id", authenticate, requireGroup, async (request, 
 // static + error handling
 // ---------------------------------------------------------------------------
 
+let distAvailable = false;
 try {
   await fs.access(distDir);
+  distAvailable = true;
+} catch {
+  distAvailable = false;
+}
+
+if (distAvailable) {
   app.use(express.static(distDir));
-  app.get("*", (_request, response) => {
+  // Express 5 rejects the old Express 4 "*" wildcard path, so the SPA
+  // fallback (needed for deep links like /join?code=...) is registered as
+  // a path-less middleware instead, which matches any method/path.
+  app.use((_request, response) => {
     response.sendFile(path.join(distDir, "index.html"));
   });
-} catch {
+} else {
   app.get("/", (_request, response) => {
     response.type("text/plain").send("Run npm run dev and open the Vite URL.");
   });
