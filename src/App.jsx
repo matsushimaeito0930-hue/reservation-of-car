@@ -7,28 +7,22 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock3,
+  Copy,
   Edit3,
   ListChecks,
   Lock,
+  LogOut,
   Plus,
   Save,
   Settings,
+  Share2,
   Trash2,
   UserRound,
+  Users,
   X
 } from "lucide-react";
 
-const defaultSettings = {
-  carName: "Rapan",
-  members: [
-    { id: "member-1", name: "弟", color: "#0f766e" },
-    { id: "member-2", name: "兄", color: "#c2410c" }
-  ]
-};
-
-const memberColors = ["#0f766e", "#c2410c", "#2563eb", "#7c3aed", "#ca8a04", "#be123c", "#475569", "#0891b2"];
-const startHourOptions = Array.from({ length: 17 }, (_, index) => index + 6);
-const endHourOptions = Array.from({ length: 17 }, (_, index) => index + 7);
+const TOKEN_KEY = "rapan-token";
 
 const viewItems = [
   { id: "calendar", label: "予定", icon: CalendarDays },
@@ -39,6 +33,8 @@ const viewItems = [
 
 const dayNames = ["日", "月", "火", "水", "木", "金", "土"];
 const fullDayNames = ["日", "月", "火", "水", "木", "金", "土"];
+const startHourOptions = Array.from({ length: 17 }, (_, index) => index + 6);
+const endHourOptions = Array.from({ length: 17 }, (_, index) => index + 7);
 
 function pad(value) {
   return String(value).padStart(2, "0");
@@ -50,16 +46,6 @@ function hourLabel(hour) {
 
 function hourValue(hour) {
   return `${pad(hour)}:00`;
-}
-
-function createMember(name, index) {
-  const id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
-
-  return {
-    id: `member-${id}`,
-    name: name.trim().slice(0, 20),
-    color: memberColors[index % memberColors.length]
-  };
 }
 
 function toDateInputValue(date) {
@@ -135,9 +121,8 @@ function reservationsOnDate(reservations, value) {
   return reservations.filter((reservation) => reservation.startDate <= value && value <= reservation.endDate);
 }
 
-function createForm(date = todayValue(), memberId = defaultSettings.members[0].id) {
+function createForm(date = todayValue()) {
   return {
-    memberId,
     title: "",
     startDate: date,
     endDate: date,
@@ -162,7 +147,7 @@ function formatReservationRange(reservation) {
 }
 
 function isValidCandidate(candidate) {
-  if (!candidate.memberId || !candidate.startDate || !candidate.endDate) return false;
+  if (!candidate.startDate || !candidate.endDate) return false;
   if (candidate.endDate < candidate.startDate) return false;
 
   if (!candidate.allDay) {
@@ -182,33 +167,159 @@ function sortReservations(first, second) {
   return reservationInterval(first).start - reservationInterval(second).start;
 }
 
+function readJoinCodeFromLocation() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    return code ? code.trim().toUpperCase().slice(0, 12) : "";
+  } catch {
+    return "";
+  }
+}
+
+async function apiRequest(token, path, options = {}) {
+  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const response = await fetch(path, {
+    method: options.method || "GET",
+    headers,
+    body: options.body ? JSON.stringify(options.body) : undefined
+  });
+
+  if (response.status === 204) {
+    if (!response.ok) throw new Error("エラーが発生しました。");
+    return null;
+  }
+
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    const error = new Error((data && data.message) || "エラーが発生しました。");
+    error.status = response.status;
+    error.conflicts = data && data.conflicts;
+    throw error;
+  }
+
+  return data;
+}
+
+async function copyText(text) {
+  if (!text) return false;
+
+  if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // fall through to the legacy fallback below
+    }
+  }
+
+  try {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.top = "-1000px";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    const ok = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+function InviteShareCard({ group, busy, onGenerate, onShare, onCopy, copied }) {
+  if (!group?.inviteCode) {
+    return (
+      <div className="invite-box">
+        <span className="invite-label">招待コードはまだありません</span>
+        <button className="primary-button" type="button" onClick={onGenerate} disabled={busy}>
+          <span>{busy ? "発行中" : "招待コードを発行する"}</span>
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="invite-box">
+      <span className="invite-label">招待コード</span>
+      <strong className="invite-code">{group.inviteCode}</strong>
+
+      <label className="copy-field">
+        <span className="sr-only">招待リンク</span>
+        <input type="text" readOnly value={group.inviteLink || ""} onFocus={(event) => event.target.select()} />
+        <button type="button" onClick={onCopy} className={copied ? "is-copied" : ""}>
+          <Copy size={15} />
+          <span>{copied ? "コピー済み" : "コピー"}</span>
+        </button>
+      </label>
+
+      <div className="share-actions">
+        <button className="primary-button" type="button" onClick={onShare}>
+          <Share2 size={18} />
+          <span>共有する</span>
+        </button>
+        <button className="ghost-button" type="button" onClick={onGenerate} disabled={busy}>
+          <span>{busy ? "発行中" : "コードを再発行する"}</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
-  const [settings, setSettings] = useState(defaultSettings);
-  const [settingsDraft, setSettingsDraft] = useState(defaultSettings);
-  const [reservations, setReservations] = useState([]);
+  const [token, setToken] = useState(() => {
+    try {
+      return window.localStorage.getItem(TOKEN_KEY) || "";
+    } catch {
+      return "";
+    }
+  });
+  const [user, setUser] = useState(null);
+  const [group, setGroup] = useState(null);
+  const [bootLoading, setBootLoading] = useState(true);
+
+  const [authMode, setAuthMode] = useState("signup");
+  const [authForm, setAuthForm] = useState({ username: "", password: "" });
+  const [authError, setAuthError] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
+
+  const [onboardMode, setOnboardMode] = useState("choose");
+  const [groupNameDraft, setGroupNameDraft] = useState("");
+  const [joinCodeDraft, setJoinCodeDraft] = useState("");
+  const [onboardError, setOnboardError] = useState("");
+  const [onboardBusy, setOnboardBusy] = useState(false);
+  const [justCreated, setJustCreated] = useState(null);
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [copiedInvite, setCopiedInvite] = useState(false);
+
   const [currentMonth, setCurrentMonth] = useState(startOfMonth(new Date()));
   const [selectedDate, setSelectedDate] = useState(todayValue());
   const [activeView, setActiveView] = useState("calendar");
   const [form, setForm] = useState(createForm());
-  const [currentUserId, setCurrentUserId] = useState("");
   const [editingId, setEditingId] = useState("");
-  const [newMemberName, setNewMemberName] = useState("");
   const [timeStage, setTimeStage] = useState("start");
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState(null);
 
+  const [groupNameSettingDraft, setGroupNameSettingDraft] = useState("");
+  const [displayNameDraft, setDisplayNameDraft] = useState("");
+  const [profileSaving, setProfileSaving] = useState(false);
+
+  const reservations = group?.reservations || [];
+
   const memberById = useMemo(() => {
-    return new Map(settings.members.map((member) => [member.id, member]));
-  }, [settings.members]);
+    return new Map((group?.members || []).map((member) => [member.userId, member]));
+  }, [group]);
 
-  const currentUser = useMemo(() => {
-    return settings.members.find((member) => member.id === currentUserId) || settings.members[0] || defaultSettings.members[0];
-  }, [currentUserId, settings.members]);
-
-  const memberHasReservations = useMemo(() => {
-    return new Set(reservations.map((reservation) => reservation.memberId));
-  }, [reservations]);
+  const myMembership = user ? memberById.get(user.id) : null;
 
   const orderedReservations = useMemo(() => {
     return [...reservations].sort(sortReservations);
@@ -263,31 +374,46 @@ export default function App() {
   }, [orderedReservations]);
 
   useEffect(() => {
-    async function loadState() {
-      try {
-        const response = await fetch("/api/state");
-        if (!response.ok) throw new Error("load failed");
-        const state = await response.json();
-        const nextSettings = state.settings || defaultSettings;
-        const savedUserId = window.localStorage.getItem("rapan-current-user-id");
-        const nextUserId = nextSettings.members.some((member) => member.id === savedUserId)
-          ? savedUserId
-          : nextSettings.members[0]?.id || defaultSettings.members[0].id;
+    const codeFromUrl = readJoinCodeFromLocation();
+    if (codeFromUrl) {
+      setJoinCodeDraft(codeFromUrl);
+      setOnboardMode("join");
+    }
 
-        setSettings(nextSettings);
-        setSettingsDraft(nextSettings);
-        setCurrentUserId(nextUserId);
-        setReservations(state.reservations || []);
-        setForm(createForm(todayValue(), nextUserId));
+    async function boot() {
+      if (!token) {
+        setBootLoading(false);
+        return;
+      }
+
+      try {
+        const data = await apiRequest(token, "/api/me");
+        setUser(data.user);
+        setGroup(data.group);
+        if (!data.group && codeFromUrl) setOnboardMode("join");
       } catch {
-        setNotice({ type: "error", message: "データを読み込めませんでした。" });
+        try {
+          window.localStorage.removeItem(TOKEN_KEY);
+        } catch {
+          /* ignore */
+        }
+        setToken("");
       } finally {
-        setLoading(false);
+        setBootLoading(false);
       }
     }
 
-    loadState();
+    boot();
   }, []);
+
+  useEffect(() => {
+    if (group) {
+      setGroupNameSettingDraft(group.name);
+    }
+    if (myMembership) {
+      setDisplayNameDraft(myMembership.displayName);
+    }
+  }, [group, myMembership]);
 
   function updateForm(patch) {
     setNotice(null);
@@ -301,17 +427,7 @@ export default function App() {
   }
 
   function canManageReservation(reservation) {
-    return reservation.memberId === currentUser?.id;
-  }
-
-  function selectCurrentUser(id) {
-    const member = settings.members.find((candidate) => candidate.id === id);
-    if (!member) return;
-
-    setCurrentUserId(member.id);
-    window.localStorage.setItem("rapan-current-user-id", member.id);
-    setForm((current) => ({ ...current, memberId: member.id }));
-    setNotice(null);
+    return !!user && reservation.userId === user.id;
   }
 
   function selectDay(value) {
@@ -326,7 +442,7 @@ export default function App() {
   function resetForm(date = selectedDate) {
     setEditingId("");
     setTimeStage("start");
-    setForm(createForm(date, currentUser?.id || settings.members[0]?.id || defaultSettings.members[0].id));
+    setForm(createForm(date));
   }
 
   function setAllDayReservation() {
@@ -355,6 +471,162 @@ export default function App() {
     setTimeStage("start");
   }
 
+  // ---- auth ----
+
+  async function submitAuth(event) {
+    event.preventDefault();
+    setAuthError("");
+
+    const username = authForm.username.trim();
+    const password = authForm.password;
+
+    if (username.length < 2) {
+      setAuthError("ユーザー名は2文字以上で入力してください。");
+      return;
+    }
+    if (password.length < 4) {
+      setAuthError("パスワードは4文字以上で入力してください。");
+      return;
+    }
+
+    setAuthBusy(true);
+    try {
+      const endpoint = authMode === "signup" ? "/api/auth/signup" : "/api/auth/login";
+      const data = await apiRequest("", endpoint, { method: "POST", body: { username, password } });
+
+      try {
+        window.localStorage.setItem(TOKEN_KEY, data.token);
+      } catch {
+        /* ignore */
+      }
+
+      setToken(data.token);
+      setUser(data.user);
+      setGroup(data.group);
+      setAuthForm({ username: "", password: "" });
+
+      if (!data.group) {
+        setOnboardMode(joinCodeDraft ? "join" : "choose");
+      }
+    } catch (error) {
+      setAuthError(error.message || "エラーが発生しました。");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function logout() {
+    try {
+      await apiRequest(token, "/api/auth/logout", { method: "POST" });
+    } catch {
+      /* ignore */
+    }
+
+    try {
+      window.localStorage.removeItem(TOKEN_KEY);
+    } catch {
+      /* ignore */
+    }
+
+    setToken("");
+    setUser(null);
+    setGroup(null);
+    setOnboardMode("choose");
+    setJustCreated(null);
+  }
+
+  // ---- onboarding ----
+
+  async function submitCreateGroup(event) {
+    event.preventDefault();
+    setOnboardError("");
+
+    const name = groupNameDraft.trim();
+    if (!name) {
+      setOnboardError("車名や家族の名前を入力してください。");
+      return;
+    }
+
+    setOnboardBusy(true);
+    try {
+      const created = await apiRequest(token, "/api/groups", { method: "POST", body: { name } });
+      setGroup(created);
+      setJustCreated(created);
+    } catch (error) {
+      setOnboardError(error.message || "作成できませんでした。");
+    } finally {
+      setOnboardBusy(false);
+    }
+  }
+
+  async function submitJoinGroup(event) {
+    event.preventDefault();
+    setOnboardError("");
+
+    const code = joinCodeDraft.trim().toUpperCase();
+    if (code.length < 4) {
+      setOnboardError("招待コードを入力してください。");
+      return;
+    }
+
+    setOnboardBusy(true);
+    try {
+      const joined = await apiRequest(token, "/api/groups/join", { method: "POST", body: { code } });
+      setGroup(joined);
+    } catch (error) {
+      setOnboardError(error.message || "参加できませんでした。");
+    } finally {
+      setOnboardBusy(false);
+    }
+  }
+
+  // ---- invite sharing ----
+
+  async function generateInviteCode() {
+    setInviteBusy(true);
+    setNotice(null);
+    try {
+      const updated = await apiRequest(token, "/api/group/invite-code", { method: "POST" });
+      setGroup(updated);
+      setJustCreated((current) => (current ? updated : current));
+    } catch (error) {
+      setNotice({ type: "error", message: error.message || "招待コードを発行できませんでした。" });
+    } finally {
+      setInviteBusy(false);
+    }
+  }
+
+  async function shareInvite(inviteGroup) {
+    if (!inviteGroup) return;
+    const text = `${inviteGroup.name}の車予約カレンダーに参加してください。招待コード: ${inviteGroup.inviteCode}`;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "車予約カレンダーへの招待", text, url: inviteGroup.inviteLink });
+        return;
+      } catch (error) {
+        if (error?.name === "AbortError") return;
+      }
+    }
+
+    await copyInviteLink(inviteGroup);
+  }
+
+  async function copyInviteLink(inviteGroup) {
+    if (!inviteGroup?.inviteLink) return;
+
+    const ok = await copyText(inviteGroup.inviteLink);
+    if (ok) {
+      setNotice({ type: "success", message: "招待リンクをコピーしました。" });
+      setCopiedInvite(true);
+      window.setTimeout(() => setCopiedInvite(false), 1800);
+    } else {
+      setNotice({ type: "error", message: "コピーできませんでした。リンクの欄をタップして選択し、手動でコピーしてください。" });
+    }
+  }
+
+  // ---- reservations ----
+
   async function submitReservation(event) {
     event.preventDefault();
     setNotice(null);
@@ -371,29 +643,24 @@ export default function App() {
 
     setSaving(true);
     try {
-      const response = await fetch(editingId ? `/api/reservations/${editingId}` : "/api/reservations", {
+      const saved = await apiRequest(token, editingId ? `/api/reservations/${editingId}` : "/api/reservations", {
         method: editingId ? "PUT" : "POST",
-        headers: { "Content-Type": "application/json", "X-Actor-Id": currentUser?.id || form.memberId },
-        body: JSON.stringify(form)
+        body: form
       });
 
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        setNotice({ type: "error", message: body.message || "予約できませんでした。" });
-        return;
-      }
-
-      const saved = await response.json();
-      setReservations((current) => {
-        if (editingId) {
-          return current.map((reservation) => (reservation.id === saved.id ? saved : reservation));
-        }
-        return [...current, saved];
+      setGroup((current) => {
+        const nextReservations = editingId
+          ? current.reservations.map((reservation) => (reservation.id === saved.id ? saved : reservation))
+          : [...current.reservations, saved];
+        return { ...current, reservations: nextReservations };
       });
+
       setSelectedDate(saved.startDate);
       resetForm(saved.startDate);
       setNotice({ type: "success", message: editingId ? "予約を更新しました。" : "予約しました。" });
       setActiveView("calendar");
+    } catch (error) {
+      setNotice({ type: "error", message: error.message || "予約できませんでした。" });
     } finally {
       setSaving(false);
     }
@@ -407,7 +674,6 @@ export default function App() {
 
     setEditingId(reservation.id);
     setForm({
-      memberId: reservation.memberId,
       title: reservation.title || "",
       startDate: reservation.startDate,
       endDate: reservation.endDate,
@@ -431,151 +697,339 @@ export default function App() {
       return;
     }
 
-    const member = memberById.get(target.memberId)?.name || "予約";
-
-    if (!window.confirm(`${member}の予約を取り消しますか？`)) return;
-
-    const response = await fetch(`/api/reservations/${id}`, {
-      method: "DELETE",
-      headers: { "X-Actor-Id": currentUser?.id || "" }
-    });
-    if (response.ok) {
-      setReservations((current) => current.filter((reservation) => reservation.id !== id));
-      if (editingId === id) resetForm();
-      setNotice({ type: "success", message: "予約を取り消しました。" });
-    } else {
-      setNotice({ type: "error", message: "取り消しできませんでした。" });
-    }
-  }
-
-  function addDraftMember() {
-    const name = newMemberName.trim();
-
-    if (!name) {
-      setNotice({ type: "error", message: "追加する名前を入力してください。" });
-      return;
-    }
-
-    if (settingsDraft.members.length >= 12) {
-      setNotice({ type: "error", message: "登録できる名前は12人までです。" });
-      return;
-    }
-
-    setSettingsDraft((current) => ({
-      ...current,
-      members: [...current.members, createMember(name, current.members.length)]
-    }));
-    setNewMemberName("");
-    setNotice(null);
-  }
-
-  function updateDraftMember(id, name) {
-    setSettingsDraft((current) => ({
-      ...current,
-      members: current.members.map((member) => (member.id === id ? { ...member, name } : member))
-    }));
-  }
-
-  function removeDraftMember(id) {
-    if (settingsDraft.members.length <= 1) {
-      setNotice({ type: "error", message: "名前は1人以上登録してください。" });
-      return;
-    }
-
-    if (memberHasReservations.has(id)) {
-      setNotice({ type: "error", message: "予約がある名前は削除できません。" });
-      return;
-    }
-
-    setSettingsDraft((current) => ({
-      ...current,
-      members: current.members.filter((member) => member.id !== id)
-    }));
-  }
-
-  async function saveSettings(event) {
-    event.preventDefault();
-    setSaving(true);
-    setNotice(null);
+    if (!window.confirm("この予約を取り消しますか？")) return;
 
     try {
-      const cleanMembers = settingsDraft.members
-        .map((member) => ({ ...member, name: member.name.trim() }))
-        .filter((member) => member.name);
-
-      if (cleanMembers.length === 0) {
-        setNotice({ type: "error", message: "名前は1人以上登録してください。" });
-        return;
-      }
-
-      const response = await fetch("/api/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...settingsDraft, members: cleanMembers })
-      });
-
-      if (!response.ok) throw new Error("settings failed");
-      const saved = await response.json();
-      const nextUserId = saved.members.some((member) => member.id === currentUserId)
-        ? currentUserId
-        : saved.members[0]?.id || defaultSettings.members[0].id;
-
-      setSettings(saved);
-      setSettingsDraft(saved);
-      setCurrentUserId(nextUserId);
-      window.localStorage.setItem("rapan-current-user-id", nextUserId);
-      setForm((current) => ({
+      await apiRequest(token, `/api/reservations/${id}`, { method: "DELETE" });
+      setGroup((current) => ({
         ...current,
-        memberId: saved.members.some((member) => member.id === current.memberId) ? current.memberId : nextUserId
+        reservations: current.reservations.filter((reservation) => reservation.id !== id)
       }));
-      setNotice({ type: "success", message: "設定を保存しました。" });
-    } catch {
-      setNotice({ type: "error", message: "設定を保存できませんでした。" });
+      if (editingId === id) resetForm();
+      setNotice({ type: "success", message: "予約を取り消しました。" });
+    } catch (error) {
+      setNotice({ type: "error", message: error.message || "取り消しできませんでした。" });
+    }
+  }
+
+  // ---- settings ----
+
+  async function saveGroupName(event) {
+    event.preventDefault();
+    const name = groupNameSettingDraft.trim();
+    if (!name) {
+      setNotice({ type: "error", message: "名前を入力してください。" });
+      return;
+    }
+
+    setProfileSaving(true);
+    try {
+      const updated = await apiRequest(token, "/api/group", { method: "PUT", body: { name } });
+      setGroup(updated);
+      setNotice({ type: "success", message: "保存しました。" });
+    } catch (error) {
+      setNotice({ type: "error", message: error.message || "保存できませんでした。" });
     } finally {
-      setSaving(false);
+      setProfileSaving(false);
+    }
+  }
+
+  async function saveDisplayName(event) {
+    event.preventDefault();
+    const displayName = displayNameDraft.trim();
+    if (!displayName) {
+      setNotice({ type: "error", message: "表示名を入力してください。" });
+      return;
+    }
+
+    setProfileSaving(true);
+    try {
+      const updated = await apiRequest(token, "/api/profile", { method: "PUT", body: { displayName } });
+      setGroup(updated);
+      setNotice({ type: "success", message: "保存しました。" });
+    } catch (error) {
+      setNotice({ type: "error", message: error.message || "保存できませんでした。" });
+    } finally {
+      setProfileSaving(false);
     }
   }
 
   const canSubmit = isValidCandidate(candidate) && liveConflicts.length === 0 && !saving;
 
+  // ---------------------------------------------------------------------
+  // screens: boot / auth / onboarding / invite intro
+  // ---------------------------------------------------------------------
+
+  if (bootLoading) {
+    return (
+      <div className="loading-screen">
+        <Car size={28} />
+        <span>読み込み中…</span>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="auth-shell">
+        <div className="auth-card">
+          <div className="brand-mark" aria-hidden="true">
+            <Car size={26} />
+          </div>
+          <h1>共有車予約</h1>
+          <p className="auth-lead">家族や仲間と車のスケジュールを共有しましょう。</p>
+
+          <div className="auth-tabs">
+            <button
+              type="button"
+              className={authMode === "signup" ? "is-active" : ""}
+              onClick={() => {
+                setAuthMode("signup");
+                setAuthError("");
+              }}
+            >
+              はじめる
+            </button>
+            <button
+              type="button"
+              className={authMode === "login" ? "is-active" : ""}
+              onClick={() => {
+                setAuthMode("login");
+                setAuthError("");
+              }}
+            >
+              ログイン
+            </button>
+          </div>
+
+          <form className="auth-form" onSubmit={submitAuth}>
+            <label className="field">
+              <span>ユーザーネーム</span>
+              <input
+                value={authForm.username}
+                onChange={(event) => setAuthForm((current) => ({ ...current, username: event.target.value }))}
+                placeholder="例: taro"
+                maxLength={24}
+                autoComplete="username"
+              />
+            </label>
+            <label className="field">
+              <span>パスワード</span>
+              <input
+                type="password"
+                value={authForm.password}
+                onChange={(event) => setAuthForm((current) => ({ ...current, password: event.target.value }))}
+                placeholder="4文字以上"
+                maxLength={64}
+                autoComplete={authMode === "signup" ? "new-password" : "current-password"}
+              />
+            </label>
+
+            {authError ? (
+              <div className="notice error">
+                <AlertCircle size={18} />
+                <span>{authError}</span>
+              </div>
+            ) : null}
+
+            <button className="primary-button" type="submit" disabled={authBusy}>
+              <span>{authBusy ? "処理中" : authMode === "signup" ? "アカウントを作成" : "ログイン"}</span>
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  if (!group) {
+    return (
+      <div className="auth-shell">
+        <div className="auth-card">
+          <div className="brand-mark" aria-hidden="true">
+            <Users size={26} />
+          </div>
+          <h1>グループを設定</h1>
+          <p className="auth-lead">{user.username}さん、車を共有するグループを作るか、招待されたグループに参加してください。</p>
+
+          {onboardMode === "choose" ? (
+            <div className="onboard-choices">
+              <button className="onboard-choice" type="button" onClick={() => setOnboardMode("create")}>
+                <strong>グループを作る</strong>
+                <span>新しく車の予約グループを作成します</span>
+              </button>
+              <button className="onboard-choice" type="button" onClick={() => setOnboardMode("join")}>
+                <strong>グループに入る</strong>
+                <span>招待コードやリンクで参加します</span>
+              </button>
+            </div>
+          ) : null}
+
+          {onboardMode === "create" ? (
+            <form className="auth-form" onSubmit={submitCreateGroup}>
+              <label className="field">
+                <span>車名・家族の名前</span>
+                <input
+                  value={groupNameDraft}
+                  onChange={(event) => setGroupNameDraft(event.target.value)}
+                  placeholder="例: プリウス"
+                  maxLength={28}
+                  autoFocus
+                />
+              </label>
+
+              {onboardError ? (
+                <div className="notice error">
+                  <AlertCircle size={18} />
+                  <span>{onboardError}</span>
+                </div>
+              ) : null}
+
+              <button className="primary-button" type="submit" disabled={onboardBusy}>
+                <span>{onboardBusy ? "作成中" : "グループを作成"}</span>
+              </button>
+              <button className="ghost-button" type="button" onClick={() => setOnboardMode("choose")}>
+                <span>戻る</span>
+              </button>
+            </form>
+          ) : null}
+
+          {onboardMode === "join" ? (
+            <form className="auth-form" onSubmit={submitJoinGroup}>
+              <label className="field">
+                <span>招待コード</span>
+                <input
+                  value={joinCodeDraft}
+                  onChange={(event) => setJoinCodeDraft(event.target.value.toUpperCase())}
+                  placeholder="例: AB12CD"
+                  maxLength={12}
+                  autoFocus
+                />
+              </label>
+
+              {onboardError ? (
+                <div className="notice error">
+                  <AlertCircle size={18} />
+                  <span>{onboardError}</span>
+                </div>
+              ) : null}
+
+              <button className="primary-button" type="submit" disabled={onboardBusy}>
+                <span>{onboardBusy ? "参加中" : "グループに参加"}</span>
+              </button>
+              <button className="ghost-button" type="button" onClick={() => setOnboardMode("choose")}>
+                <span>戻る</span>
+              </button>
+            </form>
+          ) : null}
+
+          <button className="ghost-button auth-logout" type="button" onClick={logout}>
+            <LogOut size={16} />
+            <span>ログアウト</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (justCreated) {
+    return (
+      <div className="auth-shell">
+        <div className="auth-card">
+          <div className="brand-mark" aria-hidden="true">
+            <Check size={26} />
+          </div>
+          <h1>グループを作成しました</h1>
+          <p className="auth-lead">このコードやリンクを家族に共有すると、みんなで予約カレンダーを使えます。</p>
+
+          <InviteShareCard
+            group={justCreated}
+            busy={inviteBusy}
+            copied={copiedInvite}
+            onGenerate={generateInviteCode}
+            onShare={() => shareInvite(justCreated)}
+            onCopy={() => copyInviteLink(justCreated)}
+          />
+
+          {notice ? (
+            <div className={`notice ${notice.type}`} role="status">
+              {notice.type === "success" ? <Check size={18} /> : <AlertCircle size={18} />}
+              <span>{notice.message}</span>
+            </div>
+          ) : null}
+
+          <button
+            className="primary-button"
+            type="button"
+            onClick={() => {
+              setJustCreated(null);
+              setNotice(null);
+            }}
+          >
+            <span>アプリを使いはじめる</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------------
+  // main app
+  // ---------------------------------------------------------------------
+
   return (
     <div className="app-shell">
       <header className="app-header">
         <div className="brand-area">
-          <div className="brand-mark" aria-hidden="true">
+          <div className="brand-mark transition-transform duration-300 hover:scale-105 hover:rotate-3" aria-hidden="true">
             <Car size={26} />
           </div>
           <div>
             <p className="eyebrow">共有車カレンダー</p>
-            <h1>{settings.carName}予約</h1>
+            <h1>{group.name}予約</h1>
           </div>
         </div>
 
-        <div className="vehicle-strip">
-          <img src="/rapan-driveway.png" alt={`${settings.carName}のイメージ`} className="vehicle-image" />
+        <div className="vehicle-strip transition-shadow duration-300 hover:shadow-xl">
+          <div className="vehicle-icon" aria-hidden="true">
+            <Car size={26} />
+          </div>
           <div className="vehicle-copy">
             <span className="status-label">{currentUse ? "使用中" : "空き"}</span>
-            <strong>{currentUse ? memberById.get(currentUse.memberId)?.name || "予約あり" : "今日は空いています"}</strong>
+            <strong>{currentUse ? memberById.get(currentUse.userId)?.displayName || "予約あり" : "今日は空いています"}</strong>
             <span>{nextUse ? `次回 ${dateLabel(nextUse.startDate)}` : "次の予約はありません"}</span>
           </div>
         </div>
       </header>
 
-      <section className="current-user-panel" aria-label="この端末の利用者">
-        <span>この端末の利用者</span>
-        <div className="current-user-buttons">
-          {settings.members.map((member) => (
+      <nav className="view-nav" aria-label="画面切り替え">
+        {viewItems.map((item) => {
+          const Icon = item.icon;
+          return (
             <button
-              key={member.id}
+              key={item.id}
               type="button"
-              className={currentUser?.id === member.id ? "is-active" : ""}
-              onClick={() => selectCurrentUser(member.id)}
-              style={{ "--member-color": member.color }}
+              className={activeView === item.id ? "is-active" : ""}
+              onClick={() => setActiveView(item.id)}
+              aria-label={item.label}
             >
-              <UserRound size={16} />
-              <span>{member.name}</span>
+              <Icon size={18} />
+              <span>{item.label}</span>
             </button>
-          ))}
+          );
+        })}
+      </nav>
+
+      <section className="current-user-panel" aria-label="ログイン中のユーザー">
+        <span>ログイン中</span>
+        <div className="current-user-buttons">
+          <span className="is-active" style={{ "--member-color": myMembership?.color || "#24524a" }}>
+            <UserRound size={16} />
+            <span>{myMembership?.displayName || user.username}</span>
+          </span>
+          <button type="button" className="logout-inline" onClick={logout}>
+            <LogOut size={16} />
+            <span>ログアウト</span>
+          </button>
         </div>
       </section>
 
@@ -586,7 +1040,7 @@ export default function App() {
         </div>
       ) : null}
 
-      <main className="app-main" aria-busy={loading}>
+      <main className="app-main" aria-busy={bootLoading}>
         <section className={`panel calendar-panel view-panel ${activeView === "calendar" ? "is-active" : ""}`}>
           <div className="panel-heading">
             <div>
@@ -642,7 +1096,7 @@ export default function App() {
                   key={day.value}
                   type="button"
                   className={[
-                    "day-cell",
+                    "day-cell transition-transform duration-150 hover:-translate-y-0.5",
                     day.inMonth ? "" : "is-outside",
                     isToday ? "is-today" : "",
                     isSelected ? "is-selected" : "",
@@ -655,14 +1109,14 @@ export default function App() {
                   <span className="day-number">{day.date.getDate()}</span>
                   <span className="day-bookings">
                     {day.reservations.slice(0, 2).map((reservation) => {
-                      const member = memberById.get(reservation.memberId);
+                      const member = memberById.get(reservation.userId);
                       return (
                         <span
                           key={reservation.id}
                           className="booking-dot"
                           style={{ "--member-color": member?.color || "#475569" }}
                         >
-                          {member?.name || "予約"}
+                          {member?.displayName || "予約"}
                         </span>
                       );
                     })}
@@ -696,9 +1150,9 @@ export default function App() {
                       >
                         <span
                           className="mini-color"
-                          style={{ "--member-color": memberById.get(reservation.memberId)?.color || "#475569" }}
+                          style={{ "--member-color": memberById.get(reservation.userId)?.color || "#475569" }}
                         />
-                        <span>{memberById.get(reservation.memberId)?.name || "予約"}</span>
+                        <span>{memberById.get(reservation.userId)?.displayName || "予約"}</span>
                         {!canManage ? <Lock size={14} /> : null}
                       </button>
                     );
@@ -729,19 +1183,19 @@ export default function App() {
             ) : (
               <div className="calendar-reservation-list">
                 {calendarReservations.map((reservation) => {
-                  const member = memberById.get(reservation.memberId);
+                  const member = memberById.get(reservation.userId);
                   const canManage = canManageReservation(reservation);
 
                   return (
                     <article
                       key={reservation.id}
-                      className="calendar-reservation-row"
+                      className="calendar-reservation-row transition-shadow duration-200 hover:shadow-md"
                       style={{ "--member-color": member?.color || "#475569" }}
                     >
                       <div className="booking-main">
                         <span className="member-pill">
                           <span className="pill-dot" />
-                          {member?.name || "予約"}
+                          {member?.displayName || "予約"}
                         </span>
                         <h3>{reservation.title || "車を使う"}</h3>
                         <p>
@@ -793,23 +1247,13 @@ export default function App() {
           </div>
 
           <form className="reservation-form" onSubmit={submitReservation}>
-            <fieldset className="member-field">
-              <legend>使う人</legend>
-              <div className="member-switch">
-                {settings.members.map((member) => (
-                  <button
-                    key={member.id}
-                    type="button"
-                    className={form.memberId === member.id ? "is-picked" : ""}
-                    onClick={() => selectCurrentUser(member.id)}
-                    style={{ "--member-color": member.color }}
-                  >
-                    <UserRound size={17} />
-                    <span>{member.name}</span>
-                  </button>
-                ))}
-              </div>
-            </fieldset>
+            <div className="reserving-as">
+              <span
+                className="mini-color"
+                style={{ "--member-color": myMembership?.color || "#24524a" }}
+              />
+              <span>{myMembership?.displayName || user.username}として予約します</span>
+            </div>
 
             <label className="field">
               <span>予定名</span>
@@ -901,7 +1345,7 @@ export default function App() {
                 <AlertCircle size={18} />
                 <div>
                   <strong>重複あり</strong>
-                  <span>{liveConflicts.map((reservation) => memberById.get(reservation.memberId)?.name || "予約").join("、")}</span>
+                  <span>{liveConflicts.map((reservation) => memberById.get(reservation.userId)?.displayName || "予約").join("、")}</span>
                 </div>
               </div>
             ) : null}
@@ -938,15 +1382,19 @@ export default function App() {
               </div>
             ) : (
               upcomingReservations.map((reservation) => {
-                const member = memberById.get(reservation.memberId);
+                const member = memberById.get(reservation.userId);
                 const canManage = canManageReservation(reservation);
 
                 return (
-                  <article key={reservation.id} className="booking-card" style={{ "--member-color": member?.color || "#475569" }}>
+                  <article
+                    key={reservation.id}
+                    className="booking-card transition-shadow duration-200 hover:shadow-md"
+                    style={{ "--member-color": member?.color || "#475569" }}
+                  >
                     <div className="booking-main">
                       <span className="member-pill">
                         <span className="pill-dot" />
-                        {member?.name || "予約"}
+                        {member?.displayName || "予約"}
                       </span>
                       <h3>{reservation.title || "車を使う"}</h3>
                       <p>
@@ -986,85 +1434,72 @@ export default function App() {
         <section className={`panel settings-panel view-panel ${activeView === "settings" ? "is-active" : ""}`}>
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">表示名</p>
-              <h2>設定</h2>
+              <p className="eyebrow">設定</p>
+              <h2>グループとプロフィール</h2>
             </div>
           </div>
 
-          <form className="settings-form" onSubmit={saveSettings}>
-            <label className="field">
-              <span>車名</span>
-              <input
-                value={settingsDraft.carName}
-                onChange={(event) => setSettingsDraft((current) => ({ ...current, carName: event.target.value }))}
-                maxLength={28}
-              />
-            </label>
-
-            <div className="settings-members">
-              <span className="field-label">登録した名前</span>
-              {settingsDraft.members.map((member) => (
-                <div className="member-editor" key={member.id}>
-                  <span className="member-color" style={{ "--member-color": member.color }} />
-                  <input value={member.name} onChange={(event) => updateDraftMember(member.id, event.target.value)} maxLength={20} />
-                  <button
-                    className="icon-button danger"
-                    type="button"
-                    onClick={() => removeDraftMember(member.id)}
-                    disabled={settingsDraft.members.length <= 1 || memberHasReservations.has(member.id)}
-                    aria-label="名前を削除"
-                    title={memberHasReservations.has(member.id) ? "予約がある名前は削除できません" : "名前を削除"}
-                  >
-                    <Trash2 size={18} />
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            <div className="add-member-row">
-              <input
-                value={newMemberName}
-                onChange={(event) => setNewMemberName(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    addDraftMember();
-                  }
-                }}
-                placeholder="名前を追加"
-                maxLength={20}
-              />
-              <button type="button" className="ghost-button" onClick={addDraftMember}>
-                <Plus size={18} />
-                <span>追加</span>
+          <div className="settings-form">
+            <form onSubmit={saveGroupName} className="settings-block">
+              <label className="field">
+                <span>車名・グループ名</span>
+                <input
+                  value={groupNameSettingDraft}
+                  onChange={(event) => setGroupNameSettingDraft(event.target.value)}
+                  maxLength={28}
+                />
+              </label>
+              <button className="ghost-button" type="submit" disabled={profileSaving}>
+                <Save size={18} />
+                <span>保存</span>
               </button>
+            </form>
+
+            <form onSubmit={saveDisplayName} className="settings-block">
+              <label className="field">
+                <span>自分の表示名</span>
+                <input
+                  value={displayNameDraft}
+                  onChange={(event) => setDisplayNameDraft(event.target.value)}
+                  maxLength={20}
+                />
+              </label>
+              <button className="ghost-button" type="submit" disabled={profileSaving}>
+                <Save size={18} />
+                <span>保存</span>
+              </button>
+            </form>
+
+            <div className="settings-block">
+              <span className="field-label">メンバー</span>
+              <div className="member-list">
+                {(group.members || []).map((member) => (
+                  <span key={member.userId} className="member-pill" style={{ "--member-color": member.color }}>
+                    <span className="pill-dot" />
+                    {member.displayName}
+                  </span>
+                ))}
+              </div>
             </div>
 
-            <button className="primary-button" type="submit" disabled={saving}>
-              <Save size={18} />
-              <span>保存</span>
+            <div className="settings-block">
+              <InviteShareCard
+                group={group}
+                busy={inviteBusy}
+                copied={copiedInvite}
+                onGenerate={generateInviteCode}
+                onShare={() => shareInvite(group)}
+                onCopy={() => copyInviteLink(group)}
+              />
+            </div>
+
+            <button className="ghost-button danger-outline" type="button" onClick={logout}>
+              <LogOut size={18} />
+              <span>ログアウト</span>
             </button>
-          </form>
+          </div>
         </section>
       </main>
-
-      <nav className="mobile-nav" aria-label="画面切り替え">
-        {viewItems.map((item) => {
-          const Icon = item.icon;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              className={activeView === item.id ? "is-active" : ""}
-              onClick={() => setActiveView(item.id)}
-              aria-label={item.label}
-            >
-              <Icon size={20} />
-              <span>{item.label}</span>
-            </button>
-          );
-        })}
-      </nav>
     </div>
   );
 }
