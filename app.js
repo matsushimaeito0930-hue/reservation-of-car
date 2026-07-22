@@ -20,6 +20,10 @@ const defaultStore = {
 };
 
 const app = express();
+// Vercel (and most PaaS hosts) sit behind a reverse proxy that terminates TLS.
+// Without this, req.protocol always reports "http", which made invite links
+// render as http://... instead of https://... in production.
+app.set("trust proxy", true);
 app.use(express.json({ limit: "64kb" }));
 
 // ---------------------------------------------------------------------------
